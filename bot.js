@@ -5,9 +5,13 @@ const path = require('node:path');
 require('dotenv').config();
 
 const axios = require('axios');
+const { Pool } = require('pg');
 const TelegramBot = require('node-telegram-bot-api');
 
 const TOKEN = process.env.TOKEN;
+const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_SSL =
+  process.env.DATABASE_SSL === 'true' || process.env.PGSSLMODE === 'require';
 
 if (!TOKEN) {
   console.error('Missing required environment variable: TOKEN');
@@ -93,6 +97,7 @@ let lastFxFetchAt = 0;
 let lastRetailQuote = null;
 let lastRetailFetchAt = 0;
 let lastRetailSignature = null;
+let dbPool = null;
 
 const PRICE_SYMBOLS = ['XAUUSD=X', 'GC=F'];
 const FX_SYMBOLS = ['USDIDR=X'];
@@ -121,6 +126,25 @@ function normalizeUser(user = {}) {
   };
 }
 
+function isDatabaseStorageEnabled() {
+  return Boolean(DATABASE_URL);
+}
+
+function getDbPool() {
+  if (!isDatabaseStorageEnabled()) {
+    return null;
+  }
+
+  if (!dbPool) {
+    dbPool = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
+    });
+  }
+
+  return dbPool;
+}
+
 async function ensureUsersFile() {
   try {
     await fs.access(USERS_FILE);
@@ -134,6 +158,29 @@ async function ensureUsersFile() {
 }
 
 async function loadUsers() {
+  if (isDatabaseStorageEnabled()) {
+    try {
+      const pool = getDbPool();
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS bot_users (
+          chat_id TEXT PRIMARY KEY,
+          data JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      const result = await pool.query('SELECT chat_id, data FROM bot_users');
+      users = Object.fromEntries(
+        result.rows.map((row) => [row.chat_id, normalizeUser(row.data || {})])
+      );
+      return;
+    } catch (error) {
+      console.error('Failed to load users from database:', error.message);
+      users = {};
+      return;
+    }
+  }
+
   await ensureUsersFile();
 
   try {
@@ -154,13 +201,51 @@ async function loadUsers() {
 }
 
 function saveUsers() {
-  const payload = JSON.stringify(users, null, 2) + '\n';
-
   saveQueue = saveQueue
     .catch(() => undefined)
-    .then(() => fs.writeFile(USERS_FILE, payload, 'utf8'))
+    .then(async () => {
+      if (isDatabaseStorageEnabled()) {
+        const pool = getDbPool();
+        const entries = Object.entries(users).map(([chatId, user]) => [
+          chatId,
+          JSON.stringify(normalizeUser(user)),
+        ]);
+
+        const client = await pool.connect();
+
+        try {
+          await client.query('BEGIN');
+          await client.query('DELETE FROM bot_users');
+
+          for (const [chatId, payload] of entries) {
+            await client.query(
+              `
+                INSERT INTO bot_users (chat_id, data, updated_at)
+                VALUES ($1, $2::jsonb, NOW())
+              `,
+              [chatId, payload]
+            );
+          }
+
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+
+        return;
+      }
+
+      const payload = JSON.stringify(users, null, 2) + '\n';
+      await fs.writeFile(USERS_FILE, payload, 'utf8');
+    })
     .catch((error) => {
-      console.error('Failed to save users.json:', error.message);
+      console.error(
+        `Failed to save user storage (${isDatabaseStorageEnabled() ? 'database' : 'file'}):`,
+        error.message
+      );
     });
 
   return saveQueue;
@@ -1003,6 +1088,9 @@ async function shutdown(signal) {
 
   try {
     await bot.stopPolling();
+    if (dbPool) {
+      await dbPool.end();
+    }
   } catch (error) {
     console.error('Failed to stop Telegram polling:', error.message);
   } finally {

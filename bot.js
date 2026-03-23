@@ -26,6 +26,8 @@ const RETAIL_CACHE_MS = 30_000;
 const TROY_OUNCE_TO_GRAMS = 31.1034768;
 const FALLBACK_USD_TO_IDR_RATE = 15_500;
 const FX_CACHE_MS = 30_000;
+const DISPLAY_TIME_ZONE = process.env.DISPLAY_TIME_ZONE || 'Asia/Makassar';
+const DISPLAY_TIME_LABEL = process.env.DISPLAY_TIME_LABEL || 'WITA';
 const DEFAULT_RETAIL_SPREAD_RATE = 0.0341;
 const DEFAULT_RETAIL_MID_MARKUP = 1.1058;
 const DEFAULT_RETAIL_ROUND_TO = 1_000;
@@ -96,6 +98,8 @@ let lastFxFetchAt = 0;
 let lastRetailQuote = null;
 let lastRetailFetchAt = 0;
 let lastRetailSignature = null;
+let lastMarketCheckAt = null;
+let lastRetailChangedAt = null;
 let dbPool = null;
 
 const PRICE_SYMBOLS = ['XAUUSD=X', 'GC=F'];
@@ -108,6 +112,15 @@ const usdFormatter = new Intl.NumberFormat('en-US', {
 
 const idrFormatter = new Intl.NumberFormat('id-ID', {
   maximumFractionDigits: 0,
+});
+const dateTimeFormatter = new Intl.DateTimeFormat('id-ID', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  timeZone: DISPLAY_TIME_ZONE,
 });
 
 function normalizeUser(user = {}) {
@@ -298,6 +311,14 @@ function formatSignedIdr(value) {
   return `${sign}Rp${idrFormatter.format(Math.abs(value))}`;
 }
 
+function formatDisplayDateTime(value) {
+  if (!value) {
+    return null;
+  }
+
+  return `${dateTimeFormatter.format(value)} ${DISPLAY_TIME_LABEL}`;
+}
+
 function convertUsdOunceToIdrGram(usdPerOunce, usdToIdrRate = lastUsdToIdrRate) {
   return (usdPerOunce * usdToIdrRate) / TROY_OUNCE_TO_GRAMS;
 }
@@ -434,9 +455,22 @@ function formatIdrPerGramFromUsdOunce(usdPerOunce, usdToIdrRate = lastUsdToIdrRa
   return `Rp${idrFormatter.format(convertUsdOunceToIdrGram(usdPerOunce, usdToIdrRate))}`;
 }
 
-function formatPriceMessage(price, usdToIdrRate = lastUsdToIdrRate, retailQuote) {
+function formatPriceMessage(
+  price,
+  usdToIdrRate = lastUsdToIdrRate,
+  retailQuote,
+  { checkedAt = lastMarketCheckAt, changedAt = lastRetailChangedAt } = {}
+) {
   const quote = retailQuote || buildEstimatedRetailQuote(price, usdToIdrRate);
   const sourceLabel = getRetailSourceLabel(quote.source);
+  const checkedAtLabel = formatDisplayDateTime(checkedAt);
+  const changedAtLabel = formatDisplayDateTime(changedAt);
+  const footerLines = [
+    checkedAtLabel ? `Terakhir dicek: ${checkedAtLabel}` : null,
+    changedAtLabel
+      ? `Terakhir berubah: ${changedAtLabel}`
+      : 'Perubahan harga belum terdeteksi sejak bot aktif.',
+  ].filter(Boolean);
 
   if (quote.source === 'lakuemas') {
     return [
@@ -453,6 +487,8 @@ function formatPriceMessage(price, usdToIdrRate = lastUsdToIdrRate, retailQuote)
       '',
       `Sumber harga: ${sourceLabel}`,
       'Harga beli dan jual diambil langsung dari Lakuemas.',
+      '',
+      ...footerLines,
     ].join('\n');
   }
 
@@ -468,6 +504,8 @@ function formatPriceMessage(price, usdToIdrRate = lastUsdToIdrRate, retailQuote)
     `Perkiraan harga dasar: ${formatIdrPerGramFromUsdOunce(price, usdToIdrRate)}/gr`,
     `Kurs acuan: ${formatIdr(usdToIdrRate)}/USD`,
     `Sumber harga: ${sourceLabel}`,
+    '',
+    ...footerLines,
   ].join('\n');
 }
 
@@ -587,6 +625,7 @@ async function fetchMarketSnapshot({ forceFxRefresh = false } = {}) {
   });
 
   return {
+    checkedAt: Date.now(),
     goldPrice,
     retailQuote,
     usdToIdrRate,
@@ -691,12 +730,19 @@ async function sendCurrentPrice(chatId) {
   ensureUser(chatId);
 
   try {
-    const { goldPrice, retailQuote, usdToIdrRate } = await fetchMarketSnapshot({
+    const { checkedAt, goldPrice, retailQuote, usdToIdrRate } = await fetchMarketSnapshot({
       forceFxRefresh: true,
     });
-    await sendMessage(chatId, formatPriceMessage(goldPrice, usdToIdrRate, retailQuote), {
+    await sendMessage(
+      chatId,
+      formatPriceMessage(goldPrice, usdToIdrRate, retailQuote, {
+        checkedAt,
+        changedAt: lastRetailChangedAt,
+      }),
+      {
       reply_markup: getMainKeyboard(),
-    });
+      }
+    );
   } catch (error) {
     console.error(`/price failed for ${chatId}:`, error.message);
     await sendMessage(chatId, '⚠️ Failed to fetch the latest gold price. Please try again.', {
@@ -856,7 +902,7 @@ async function checkPrice() {
 
   try {
     const marketSnapshot = await fetchMarketSnapshot();
-    const { goldPrice: currentPrice, retailQuote } = marketSnapshot;
+    const { checkedAt, goldPrice: currentPrice, retailQuote } = marketSnapshot;
     const retailSignature = getRetailSignature(retailQuote);
 
     if (lastPrice === null) {
@@ -865,12 +911,14 @@ async function checkPrice() {
       }
 
       lastPrice = currentPrice;
+      lastMarketCheckAt = checkedAt;
       lastRetailSignature = retailSignature;
       lastRetailQuote = retailQuote;
       return;
     }
 
     if (retailSignature !== lastRetailSignature) {
+      lastRetailChangedAt = checkedAt;
       await handleNormalNotifications(currentPrice, lastPrice, marketSnapshot, lastRetailQuote);
     } else {
       for (const [chatId, user] of Object.entries(users)) {
@@ -879,6 +927,7 @@ async function checkPrice() {
     }
 
     lastPrice = currentPrice;
+    lastMarketCheckAt = checkedAt;
     lastRetailSignature = retailSignature;
     lastRetailQuote = retailQuote;
   } catch (error) {

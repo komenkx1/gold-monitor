@@ -443,6 +443,19 @@ function formatPriceMessage(price, usdToIdrRate = lastUsdToIdrRate, retailQuote)
   const quote = retailQuote || buildEstimatedRetailQuote(price, usdToIdrRate);
   const sourceLabel = getRetailSourceLabel(quote.source);
 
+  if (quote.source === 'lakuemas') {
+    return [
+      '🪙 Harga Emas Hari Ini',
+      '',
+      `Harga beli: ${formatIdr(quote.buyIdrPerGram)}/gr`,
+      `Harga jual: ${formatIdr(quote.sellIdrPerGram)}/gr`,
+      `Selisih beli-jual: ${formatIdr(quote.spreadIdr)} (${quote.spreadPct.toFixed(2)}%)`,
+      '',
+      `Sumber harga: ${sourceLabel}`,
+      'Harga beli dan jual diambil langsung dari Lakuemas.',
+    ].join('\n');
+  }
+
   return [
     '🪙 Harga Emas Hari Ini',
     '',
@@ -811,10 +824,16 @@ async function handleNormalNotifications(currentPrice, previousPrice, marketSnap
         `Harga jual sekarang: ${formatIdr(retailQuote.sellIdrPerGram)}/gr (${formatSignedIdr(sellChange)})`,
         `Selisih beli-jual: ${formatIdr(retailQuote.spreadIdr)} (${retailQuote.spreadPct.toFixed(2)}%)`,
         '',
-        'Info tambahan:',
-        `Perubahan emas dunia: ${formatUsd(spotChange)}/oz`,
-        `Kurs acuan: ${formatIdr(usdToIdrRate)}/USD`,
-        `Sumber harga: ${getRetailSourceLabel(retailQuote.source)}`,
+        retailQuote.source === 'lakuemas'
+          ? `Sumber harga: ${getRetailSourceLabel(retailQuote.source)}`
+          : 'Info tambahan:',
+        ...(retailQuote.source === 'lakuemas'
+          ? []
+          : [
+              `Perubahan emas dunia: ${formatUsd(spotChange)}/oz`,
+              `Kurs acuan: ${formatIdr(usdToIdrRate)}/USD`,
+              `Sumber harga: ${getRetailSourceLabel(retailQuote.source)}`,
+            ]),
       ].join('\n')
     );
 

@@ -1,0 +1,19 @@
+{
+  "name": "bot-gold",
+  "version": "1.0.0",
+  "description": "Production-ready Telegram bot for XAUUSD monitoring",
+  "main": "bot.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node bot.js",
+    "check": "node --check bot.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}

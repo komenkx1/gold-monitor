@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+bot.log
+bot.pid
+users.json
+.DS_Store

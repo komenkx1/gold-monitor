@@ -2,10 +2,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY bot.js ./
+COPY --chown=node:node bot.js ./
+RUN chown -R node:node /app
 
 USER node
 

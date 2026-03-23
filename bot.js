@@ -24,9 +24,8 @@ const USERS_FILE = path.join(__dirname, 'users.json');
 const POLL_INTERVAL_MS = 30_000;
 const RETAIL_CACHE_MS = 30_000;
 const TROY_OUNCE_TO_GRAMS = 31.1034768;
-const REFERENCE_USD_TO_IDR_RATE = 15_500;
+const FALLBACK_USD_TO_IDR_RATE = 15_500;
 const FX_CACHE_MS = 30_000;
-const LIVE_FX_WEIGHT = 0;
 const DEFAULT_RETAIL_SPREAD_RATE = 0.0341;
 const DEFAULT_RETAIL_MID_MARKUP = 1.1058;
 const DEFAULT_RETAIL_ROUND_TO = 1_000;
@@ -92,7 +91,7 @@ let isCheckingPrice = false;
 let saveQueue = Promise.resolve();
 let pollTimer = null;
 let activeYahooSymbol = 'XAUUSD=X';
-let lastUsdToIdrRate = REFERENCE_USD_TO_IDR_RATE;
+let lastUsdToIdrRate = FALLBACK_USD_TO_IDR_RATE;
 let lastFxFetchAt = 0;
 let lastRetailQuote = null;
 let lastRetailFetchAt = 0;
@@ -299,10 +298,6 @@ function formatSignedIdr(value) {
   return `${sign}Rp${idrFormatter.format(Math.abs(value))}`;
 }
 
-function blendUsdToIdrRate(liveRate) {
-  return REFERENCE_USD_TO_IDR_RATE + (liveRate - REFERENCE_USD_TO_IDR_RATE) * LIVE_FX_WEIGHT;
-}
-
 function convertUsdOunceToIdrGram(usdPerOunce, usdToIdrRate = lastUsdToIdrRate) {
   return (usdPerOunce * usdToIdrRate) / TROY_OUNCE_TO_GRAMS;
 }
@@ -451,6 +446,11 @@ function formatPriceMessage(price, usdToIdrRate = lastUsdToIdrRate, retailQuote)
       `Harga jual: ${formatIdr(quote.sellIdrPerGram)}/gr`,
       `Selisih beli-jual: ${formatIdr(quote.spreadIdr)} (${quote.spreadPct.toFixed(2)}%)`,
       '',
+      'Info pasar global:',
+      `Harga emas dunia: ${formatUsd(price)}/oz`,
+      `Kurs USD/IDR live: ${formatIdr(usdToIdrRate)}/USD`,
+      `Spot global setara: ${formatIdrPerGramFromUsdOunce(price, usdToIdrRate)}/gr`,
+      '',
       `Sumber harga: ${sourceLabel}`,
       'Harga beli dan jual diambil langsung dari Lakuemas.',
     ].join('\n');
@@ -560,7 +560,7 @@ async function fetchUsdToIdrRate({ forceRefresh = false } = {}) {
         throw new Error(`Unable to read FX rate for ${symbol}`);
       }
 
-      lastUsdToIdrRate = blendUsdToIdrRate(rate);
+      lastUsdToIdrRate = rate;
       lastFxFetchAt = now;
       return lastUsdToIdrRate;
     } catch (error) {
@@ -574,7 +574,7 @@ async function fetchUsdToIdrRate({ forceRefresh = false } = {}) {
     }`
   );
 
-  return lastUsdToIdrRate || REFERENCE_USD_TO_IDR_RATE;
+  return lastUsdToIdrRate || FALLBACK_USD_TO_IDR_RATE;
 }
 
 async function fetchMarketSnapshot({ forceFxRefresh = false } = {}) {

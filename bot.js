@@ -96,6 +96,7 @@ let activeYahooSymbol = 'XAUUSD=X';
 let lastUsdToIdrRate = FALLBACK_USD_TO_IDR_RATE;
 let lastFxFetchAt = 0;
 let lastRetailQuote = null;
+let lastRetailQuoteCache = null;
 let lastRetailFetchAt = 0;
 let lastRetailSignature = null;
 let lastMarketCheckAt = null;
@@ -402,9 +403,9 @@ function parseLakuemasRetailQuote(html, fallbackSpotIdrPerGram) {
 async function fetchRetailQuote(usdPerOunce, usdToIdrRate, { forceRefresh = false } = {}) {
   const now = Date.now();
   const fallbackQuote = buildEstimatedRetailQuote(usdPerOunce, usdToIdrRate);
-  const cachedRetailQuote = lastRetailQuote
+  const cachedRetailQuote = lastRetailQuoteCache
     ? {
-        ...lastRetailQuote,
+        ...lastRetailQuoteCache,
         spotIdrPerGram: fallbackQuote.spotIdrPerGram,
       }
     : null;
@@ -426,7 +427,7 @@ async function fetchRetailQuote(usdPerOunce, usdToIdrRate, { forceRefresh = fals
       });
 
       const retailQuote = parseLakuemasRetailQuote(response.data, fallbackQuote.spotIdrPerGram);
-      lastRetailQuote = retailQuote;
+      lastRetailQuoteCache = retailQuote;
       lastRetailFetchAt = now;
       return retailQuote;
     } catch (error) {
